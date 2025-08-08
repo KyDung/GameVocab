@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Vocab Practice Game</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        background-color: #f0f8ff;
+        padding: 20px;
+        text-align: center;
+      }
+      .mode-btn {
+        margin: 10px;
+        padding: 10px 20px;
+        font-size: 16px;
+        cursor: pointer;
+      }
+      #game-container {
+        margin-top: 30px;
+      }
+      input {
+        padding: 8px;
+        width: 300px;
+      }
+      button {
+        padding: 8px 16px;
+        margin-top: 10px;
+      }
+      .question {
+        font-size: 18px;
+        margin: 20px 0;
+      }
+      .options button {
+        display: block;
+        margin: 10px auto;
+        width: 60%;
+      }
+      .hidden {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Vocab Practice Game</h1>
+    <div>
+      <button class="mode-btn" onclick="setMode('en-to-vn')">
+        EN → VN (Input)
+      </button>
+      <button class="mode-btn" onclick="setMode('vn-to-en')">
+        VN → EN (Input)
+      </button>
+      <button class="mode-btn" onclick="setMode('quiz-en')">
+        Quiz (EN → Choose VN)
+      </button>
+      <button class="mode-btn" onclick="setMode('quiz-vn')">
+        Quiz (VN → Choose EN)
+      </button>
+    </div>
+    <div id="game-container"></div>
+
+    <script>
+      // ===== Link GViz JSON từ sheet của bạn (gid=0) =====
+      const GVIZ_URL =
+        "https://docs.google.com/spreadsheets/d/1N8GloaVAhg7Dy7hGwYUYig0EiqAQpb7uuBZrzQleDHQ/gviz/tq?tqx=out:json&gid=0";
+
+      // ===== Biến game =====
+      let vocab = []; // {en, vn}
+      let mode = "";
+      let current = {};
+      let answerLang = "";
+      let answered = false;
+      let showingResult = false;
+      let pool = [];
+      let index = 0;
+
+      // ===== Nạp dữ liệu từ GViz khi mở trang =====
+      window.addEventListener("DOMContentLoaded", async () => {
+        document
+          .querySelectorAll(".mode-btn")
+          .forEach((b) => (b.disabled = true));
+        const container = document.getElementById("game-container");
+        container.innerHTML = `<div>Đang tải dữ liệu từ Google Sheet...</div>`;
+
+        try {
+          const res = await fetch(GVIZ_URL, { cache: "no-store" });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const text = await res.text();
+
+          // GViz trả về: google.visualization.Query.setResponse({...});
+          const jsonStr = text
+            .replace(/^[\s\S]*setResponse\(/, "")
+            .replace(/\);\s*$/, "");
+          const data = JSON.parse(jsonStr);
+
+          const rows = data?.table?.rows || [];
+          if (!rows.length) throw new Error("Sheet rỗng hoặc sai gid.");
+
+          // Lấy 2 cột đầu (A=en, B=vn). Nếu dòng đầu là 'en'|'vn' thì bỏ.
+          let parsed = rows.map((r) => {
+            const c = r.c || [];
+            const en = (c[0]?.v ?? "").toString().trim();
+            const vn = (c[1]?.v ?? "").toString().trim();
+            return { en, vn };
+          });
+          if (
+            parsed.length &&
+            parsed[0].en.toLowerCase() === "en" &&
+            parsed[0].vn.toLowerCase() === "vn"
+          ) {
+            parsed.shift();
+          }
+          vocab = parsed.filter((x) => x.en && x.vn);
+
+          if (!vocab.length)
+            throw new Error("Không có dữ liệu hợp lệ (cột A/B trống?).");
+
+          container.innerHTML = `<div>Đã tải <b>${vocab.length}</b> mục. Chọn chế độ để chơi.</div>`;
+          console.log("Loaded sample:", vocab.slice(0, 5));
+        } catch (e) {
+          console.error(e);
+          container.innerHTML = `<div style="color:#b00">Lỗi tải Google Sheet: ${e.message}</div>
+          <div>Kiểm tra: Sheet đã Share <b>Anyone with the link → Viewer</b>, đúng <b>gid</b>, dữ liệu ở 2 cột đầu (A=en, B=vn).</div>`;
+        } finally {
+          document
+            .querySelectorAll(".mode-btn")
+            .forEach((b) => (b.disabled = false));
+        }
+      });
+
+      // ===== Logic game =====
+      function setMode(selectedMode) {
+        if (!vocab.length) {
+          alert("Chưa có dữ liệu. Kiểm tra Sheet rồi tải lại trang.");
+          return;
+        }
+        mode = selectedMode;
+        answered = false;
+        showingResult = false;
+        pool = shuffle([...vocab]); // random thứ tự và không lặp
+        index = 0;
+        nextQuestion();
+      }
+
+      function nextQuestion() {
+        if (index >= pool.length) {
+          const container = document.getElementById("game-container");
+          container.innerHTML = `
+          <div style="font-size:20px; font-weight:bold; margin-top:20px;">🎉 You've finished all questions!</div>
+          <button onclick="setMode(mode)">Play Again</button>
+          <button onclick="document.getElementById('game-container').innerHTML = ''">Return to Menu</button>
+        `;
+          return;
+        }
+
+        current = pool[index++];
+        answered = false;
+        showingResult = false;
+        const container = document.getElementById("game-container");
+        container.innerHTML = "";
+
+        let title = `<div style='font-weight:bold'>Question ${index}/${pool.length}</div>`;
+
+        if (mode === "en-to-vn") {
+          answerLang = "vn";
+          container.innerHTML =
+            title +
+            `
+          <div class="question">Translate to Vietnamese: <strong>${escapeHtml(
+            current.en
+          )}</strong></div>
+          <input type="text" id="answer">
+          <br><button onclick="checkAnswer('vn')">Submit</button>
+        `;
+        } else if (mode === "vn-to-en") {
+          answerLang = "en";
+          container.innerHTML =
+            title +
+            `
+          <div class="question">Translate to English: <strong>${escapeHtml(
+            current.vn
+          )}</strong></div>
+          <input type="text" id="answer">
+          <br><button onclick="checkAnswer('en')">Submit</button>
+        `;
+        } else if (mode === "quiz-en") {
+          const choices = shuffle(getOptions("vn", current.vn));
+          container.innerHTML =
+            title +
+            `<div class="question">What is the meaning of: <strong>${escapeHtml(
+              current.en
+            )}</strong></div>`;
+          const buttons = choices
+            .map(
+              (v) =>
+                `<button class="quiz-btn" onclick="choose(this, '${escapeAttr(
+                  v
+                )}', '${escapeAttr(current.vn)}')">${escapeHtml(v)}</button>`
+            )
+            .join("");
+          container.innerHTML += `<div class="options">${buttons}</div>`;
+        } else if (mode === "quiz-vn") {
+          const choices = shuffle(getOptions("en", current.en));
+          container.innerHTML =
+            title +
+            `<div class="question">What is the English of: <strong>${escapeHtml(
+              current.vn
+            )}</strong></div>`;
+          const buttons = choices
+            .map(
+              (v) =>
+                `<button class="quiz-btn" onclick="choose(this, '${escapeAttr(
+                  v
+                )}', '${escapeAttr(current.en)}')">${escapeHtml(v)}</button>`
+            )
+            .join("");
+          container.innerHTML += `<div class="options">${buttons}</div>`;
+        }
+
+        setTimeout(() => {
+          const input = document.getElementById("answer");
+          if (input) input.focus();
+        }, 100);
+      }
+
+      document.addEventListener("keydown", function (e) {
+        if (e.key === "Escape") nextQuestion();
+        if (e.key === "Enter") {
+          if (mode.startsWith("quiz") && showingResult) retryQuestion();
+          else {
+            const input = document.getElementById("answer");
+            if (input) {
+              if (!answered) checkAnswer(answerLang);
+              else if (showingResult) retryQuestion();
+            }
+          }
+        }
+      });
+
+      function checkAnswer(lang) {
+        const inputElem = document.getElementById("answer");
+        const input = (inputElem?.value || "").trim().toLowerCase();
+        const correct = (current[lang] || "").toLowerCase();
+        const container = document.getElementById("game-container");
+        container.innerHTML += `<div style="margin-top:10px;font-weight:bold;color:${
+          input === correct ? "green" : "red"
+        }">${
+          input === correct
+            ? "✅ Correct!"
+            : "❌ Incorrect. Correct answer: " + escapeHtml(current[lang])
+        }</div>`;
+        container.innerHTML += `<button onclick="retryQuestion()">Try Again (Enter)</button> <button onclick="nextQuestion()">Next (Esc)</button>`;
+        answered = true;
+        showingResult = true;
+      }
+
+      function retryQuestion() {
+        index--;
+        nextQuestion();
+      }
+
+      function choose(btn, choice, correct) {
+        if (answered) return;
+        answered = true;
+        showingResult = true;
+        const container = document.getElementById("game-container");
+        const buttons = document.querySelectorAll(".quiz-btn");
+        buttons.forEach((b) => (b.disabled = true));
+        btn.style.backgroundColor = choice === correct ? "#90ee90" : "#ffb6b6";
+        container.innerHTML += `<div style="margin-top:10px;font-weight:bold;color:${
+          choice === correct ? "green" : "red"
+        }">${
+          choice === correct
+            ? "✅ Correct!"
+            : "❌ Incorrect. Correct answer: " + escapeHtml(correct)
+        }</div>`;
+        container.innerHTML += `<button onclick="retryQuestion()">Try Again (Enter)</button> <button onclick="nextQuestion()">Next (Esc)</button>`;
+      }
+
+      function getOptions(field, correct) {
+        let options = [correct];
+        const poolVals = vocab.map((v) => v[field]).filter(Boolean);
+        while (options.length < 4 && options.length < poolVals.length) {
+          const item = poolVals[Math.floor(Math.random() * poolVals.length)];
+          if (!options.includes(item)) options.push(item);
+        }
+        return shuffle(options);
+      }
+
+      function shuffle(arr) {
+        for (let i = arr.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [arr[i], arr[j]] = [arr[j], arr[i]];
+        }
+        return arr;
+      }
+
+      // Escape utils
+      function escapeHtml(str) {
+        return String(str)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;");
+      }
+      function escapeAttr(str) {
+        return String(str).replace(/'/g, "\\'").replace(/"/g, '\\"');
+      }
+    </script>
+  </body>
+</html>
