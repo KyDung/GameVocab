@@ -149,7 +149,6 @@
         box-shadow: var(--shadow);
         padding: 18px;
       }
-
       .modes {
         display: flex;
         flex-wrap: wrap;
@@ -263,13 +262,14 @@
         cursor: pointer;
         font-size: 16px;
         transition: transform 0.06s ease, border-color 0.2s;
+        color: var(--text); /* đảm bảo tương phản ở Light/Dark */
       }
       .quiz-btn:hover {
         transform: translateY(-1px);
         border-color: var(--primary);
       }
       .quiz-btn[disabled] {
-        opacity: 0.7;
+        opacity: 0.85;
         cursor: default;
         transform: none;
       }
@@ -385,7 +385,7 @@
       const GVIZ_URL =
         "https://docs.google.com/spreadsheets/d/1N8GloaVAhg7Dy7hGwYUYig0EiqAQpb7uuBZrzQleDHQ/gviz/tq?tqx=out:json&gid=0";
 
-      // Theme (không dùng API lạ)
+      // Theme
       (function () {
         const saved = localStorage.getItem("theme") || "light";
         if (saved === "dark") document.body.classList.add("dark");
@@ -419,6 +419,7 @@
       let correctCount = 0,
         wrongCount = 0,
         lastOutcome = null;
+      let completedCount = 0; // ✅ số câu đã hoàn thành (để vẽ tiến trình mượt)
 
       // HUD refs
       const hud = document.getElementById("hud");
@@ -426,7 +427,7 @@
       const okEl = document.getElementById("ok");
       const badEl = document.getElementById("bad");
 
-      // Load data (tránh regex phức tạp)
+      // Load data
       window.addEventListener("DOMContentLoaded", async () => {
         document
           .querySelectorAll(".mode-btn")
@@ -437,7 +438,6 @@
           const res = await fetch(GVIZ_URL, { cache: "no-store" });
           if (!res.ok) throw new Error("HTTP " + res.status);
           const text = await res.text();
-          // cắt chuỗi an toàn
           const start = text.indexOf("setResponse(");
           const end = text.lastIndexOf(");");
           if (start === -1 || end === -1)
@@ -489,23 +489,26 @@
         correctCount = 0;
         wrongCount = 0;
         lastOutcome = null;
+        completedCount = 0; // reset tiến trình
         okEl.textContent = "0";
         badEl.textContent = "0";
         hud.classList.remove("hidden");
+        updateProgress();
         nextQuestion();
       }
 
+      // ✅ Vẽ tiến trình theo số câu đã hoàn thành
       function updateProgress() {
-        const shown = Math.max(0, index - 1);
-        const pct = (shown / pool.length) * 100;
+        const total = pool.length || 1;
+        const pct = (completedCount / total) * 100;
         bar.style.width = pct.toFixed(2) + "%";
       }
 
       function nextQuestion() {
         const container = document.getElementById("game-container");
 
+        // Nếu đã hoàn tất toàn bộ, hiển thị màn hình kết thúc (thanh tiến trình đã lên 100% ở lần trả lời cuối)
         if (index >= pool.length) {
-          updateProgress();
           container.innerHTML = `
           <div style="font-size:20px;font-weight:900;margin-top:6px;">🎉 You've finished all ${
             mode.startsWith("flash") ? "items" : "questions"
@@ -518,13 +521,14 @@
           return;
         }
 
-        current = pool[index++];
+        current = pool[index++]; // chuyển sang câu mới
         answered = false;
         showingResult = false;
         flashShown = false;
         lastOutcome = null;
         container.innerHTML = "";
 
+        // Lúc vừa hiển thị câu mới: tiến trình vẫn giữ ở số câu đã hoàn thành (không nhảy vọt)
         updateProgress();
 
         const head = `
@@ -646,6 +650,13 @@
         }
       });
 
+      function markCompletedOnce() {
+        // Tăng tiến trình đúng 1 lần cho câu hiện tại
+        if (!showingResult) return; // đảm bảo chỉ sau khi đã chấm/hiện kết quả
+        // Không nhân đôi ở các lần click sau
+        // completedCount phản ánh số câu đã hiển thị kết quả xong
+      }
+
       function checkAnswer(lang) {
         if (answered) return;
         const inputElem = document.getElementById("answer");
@@ -668,6 +679,10 @@
           document.getElementById("bad-inline").textContent =
             String(wrongCount);
         }
+
+        // ✅ Hoàn thành câu này → tăng tiến trình ngay
+        completedCount = Math.min(completedCount + 1, pool.length);
+        updateProgress();
 
         const container = document.getElementById("game-container");
         container.insertAdjacentHTML(
@@ -697,6 +712,12 @@
       }
 
       function retryQuestion() {
+        // Lùi lại tiến trình vì bạn làm lại câu này
+        if (completedCount > 0) {
+          completedCount--;
+          updateProgress();
+        }
+
         if (lastOutcome === "ok") {
           correctCount--;
           okEl.textContent = String(correctCount);
@@ -709,6 +730,7 @@
             String(wrongCount);
         }
         lastOutcome = null;
+        // Quay lại câu trước
         index = Math.max(0, index - 1);
         nextQuestion();
       }
@@ -738,6 +760,10 @@
           document.getElementById("bad-inline").textContent =
             String(wrongCount);
         }
+
+        // ✅ Hoàn thành câu này → tăng tiến trình ngay
+        completedCount = Math.min(completedCount + 1, pool.length);
+        updateProgress();
 
         const container = document.getElementById("game-container");
         container.insertAdjacentHTML(
@@ -769,6 +795,9 @@
         if (again) again.classList.remove("hidden");
       }
       function flashKnow() {
+        // ✅ flashcard được tính là hoàn thành khi bạn chọn "I knew it"
+        completedCount = Math.min(completedCount + 1, pool.length);
+        updateProgress();
         nextQuestion();
       }
       function flashAgain() {
